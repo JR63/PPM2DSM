@@ -71,10 +71,10 @@ resulting in the following defines:
 
 //#define PWM_MID			1500
 //#define PWM_SUB			1000
-#define PWM_MID			1520					// Futaba midpoint is 1520 us ...
+#define PWM_MID			1520					// Futaba midpoint is 1520 microseconds ...
 #define PWM_SUB			1008					// ... so with 10bit we have min = 1008, max = 2031 resulting in 0 to 1023 for DSM pulse
 
-#define P_COR			10					// add some us for global correction
+#define P_COR			10					// add some microseconds for global oscillator correction
 
 #define CHANNEL_MAPPING		1,2,3,4,5,6				// choose your channel mapping
 #define THROTTLE_CHANNEL	1					// choose your throttle channel
@@ -86,9 +86,9 @@ resulting in the following defines:
 #define CAPTURE_EDGE		CAPTURE_FALLING				// choose edge
 
 #define TICKS_PER_uS		1					// number of timer ticks per 1 microsecond with prescaler = 8 and CPU 8MHz
-#define MIN_IN_PULSE		( 750 * TICKS_PER_uS)			// valid pulse must be at least   750us
-#define MAX_IN_PULSE		(2250 * TICKS_PER_uS)			// valid pulse must be less than 2250us
-#define SYNC_GAP_LEN		(5000 * TICKS_PER_uS)			// we assume a space at least 5000us is sync
+#define MIN_IN_PULSE		( 750 * TICKS_PER_uS)			// valid pulse must be at least   750 microseconds
+#define MAX_IN_PULSE		(2250 * TICKS_PER_uS)			// valid pulse must be less than 2250 microseconds
+#define SYNC_GAP_LEN		(5000 * TICKS_PER_uS)			// we assume a space at least 5000 microseconds is sync
 
 #define MAX_CHANNELS		8					// maximum number of channels we can store, don't increase this above 8
 #define DSM_CHANNELS		6					// max number of DSM channels transmitted
@@ -105,23 +105,20 @@ resulting in the following defines:
 
 
 typedef enum {
-    NULL_ST = -1, NOT_SYNCED, ACQUIRE, READY, FAILSAFE
+    ACQUIRE, READY, FAILSAFE
 } State_t;
 
 
-static State_t State;							// this will be one of the following states: NULL_ST, NOT_SYNCED, ACQUIRE, READY, FAILSAFE
-static byte acquireCount;						// counts the number of times ACQUIRE state has been repeated
+static State_t State = ACQUIRE;						// PPM state
 
-static byte ChannelNum;							// number of channels detected so far in the frame (first channel is 1)
-static byte ChannelCnt;							// the total number of channels detected in a complete frame
+static byte ChannelNum = 0;						// number of channels detected so far in the frame (first channel is 1)
+static byte ChannelCnt = 0;						// the total number of channels detected in a complete frame
 
-static int Pulses  [MAX_CHANNELS + 1];					// array holding channel pulses width value in microseconds
-static int Failsafe[MAX_CHANNELS + 1];					// array holding channel fail safe values
+static int Failsafe[MAX_CHANNELS + 1];					// array holding channel fail safe values in microseconds
+static int Pulses  [MAX_CHANNELS + 1];					// array holding channel pulse width values in microseconds
 
 static byte DSM_Header[2] = {DSM_HEADER_0, DSM_HEADER_1};
 static byte DSM_Channel[DSM_CHANNELS * 2];
-
-static byte ChanIndex[] = {CHANNEL_MAPPING};				// PPM to DSM channel mapping table
 
 static byte newDSM = 0;
 
@@ -135,25 +132,20 @@ class PPM_Decode
 public:
   PPM_Decode(void)							// Constructor
   {
-    // empty
+    for (byte ch = 1; ch <= MAX_CHANNELS; ch++)				// set midpoint as default values for pulses and failsafe
+      Failsafe[ch] = Pulses[ch] = PWM_MID;
+									// set the throttle channel to min throttle
+    Failsafe[THROTTLE_CHANNEL] = Pulses[THROTTLE_CHANNEL] = PWM_MIN_THROTTLE;
   }
 
   void begin(void)
   {
-    ChannelNum = 0;
-    ChannelCnt = 0;
-    State  = NOT_SYNCED;
     pinMode(8, INPUT);							// timer 1 interrupt handler uses pin 8 as input, do not change it
     TCCR1A = 0x00;							// COM1A1 = 0, COM1A0 = 0  =>  disconnect Pin OC1 from timer/counter 1
 									// PWM11  = 0, PWM10  = 0  =>  PWM operation disabled
     TCCR1B = CAPTURE_EDGE;						// set capture and prescaler
 									// 8 MHz clock with prescaler 8 means TCNT1 increments every 1 uS
     TIMSK1 = _BV(ICIE1) | _BV (TOIE1);					// enable input capture and overflow interrupts for timer 1
-
-    for (byte ch = 1; ch <= MAX_CHANNELS; ch++)
-      Failsafe[ch] = Pulses[ch] = PWM_MID;				// set midpoint as default values for pulses and failsafe
-									// set the throttle channel to min throttle
-    Failsafe[THROTTLE_CHANNEL] = Pulses[THROTTLE_CHANNEL] = PWM_MIN_THROTTLE;
   }
 
   State_t getState(void)
@@ -188,7 +180,9 @@ PPM_Decode PPM = PPM_Decode();
  */
 static void pulseToDSM(void)
 {
+  static byte ChanIndex[] = {CHANNEL_MAPPING};				// PPM to DSM channel mapping table
   int pulse;
+  
   for (byte i=0; i<DSM_CHANNELS; i++) {
     pulse = PPM.getChannelData(ChanIndex[i]) - PWM_SUB;
     pulse = constrain(pulse, 0, 0x3FF);
@@ -276,24 +270,21 @@ static void sendDSM(void)
  */
 static void processSync(void)						// sync pulse was detected so reset the channel to first and update the system state
 {
+  static byte acquireCount = 0;						// counts the number of times ACQUIRE state has been repeated
+	
   Pulses[0] = ICR1 / TICKS_PER_uS;					// save the sync pulse duration for debugging
   if (State == READY) {
     if (ChannelNum != ChannelCnt)					// if the number of channels is unstable, go into failsafe
       State = FAILSAFE;
   } else {
-    if (State == NOT_SYNCED) {
-      State = ACQUIRE;							// this is the first sync pulse, we need one more to fill the channel data array
-      acquireCount = 0;
+    if (State == FAILSAFE) {
+      if (ChannelNum == ChannelCnt)					// did we get good pulses on all channels?
+        State = READY;
     } else {
       if (State == ACQUIRE) {
         if (++acquireCount > ACQUIRE_FRAMES) {
           State = READY;						// this is the ACQUIRE_FRAMESth sync and all channel data is ok so flag that channel data is valid
           ChannelCnt = ChannelNum;					// save the number of channels detected
-        }
-      } else {
-        if (State == FAILSAFE) {
-          if (ChannelNum == ChannelCnt)					// did we get good pulses on all channels?
-            State = READY;
         }
       }
     }
