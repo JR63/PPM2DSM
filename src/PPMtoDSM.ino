@@ -126,69 +126,11 @@ static byte ChanIndex[] = {CHANNEL_MAPPING};				// PPM to DSM channel mapping ta
 static byte newDSM = 0;
 
 
-/* ---------- ---------- ---------- Sync ---------- ---------- ---------- */
-static void processSync(void)						// sync pulse was detected so reset the channel to first and update the system state
+/**
+ * @brief  class
+ */
+class PPM_Decode
 {
-  Pulses[0] = ICR1 / TICKS_PER_uS;					// save the sync pulse duration for debugging
-  if (State == READY) {
-    if (ChannelNum != ChannelCnt)					// if the number of channels is unstable, go into failsafe
-      State = FAILSAFE;
-  } else {
-    if (State == NOT_SYNCED) {
-      State = ACQUIRE;							// this is the first sync pulse, we need one more to fill the channel data array
-      acquireCount = 0;
-    } else {
-      if (State == ACQUIRE) {
-        if (++acquireCount > ACQUIRE_FRAMES) {
-          State = READY;						// this is the ACQUIRE_FRAMESth sync and all channel data is ok so flag that channel data is valid
-          ChannelCnt = ChannelNum;					// save the number of channels detected
-        }
-      } else {
-        if (State == FAILSAFE) {
-          if (ChannelNum == ChannelCnt)					// did we get good pulses on all channels?
-            State = READY;
-        }
-      }
-    }
-  }
-  ChannelNum = 0;							// reset the channel counter
-}
-
-
-/* ---------- ---------- ---------- Interrupt ---------- ---------- ---------- */
-ISR (TIMER1_OVF_vect)
-{
-  if (State == READY) {
-    State = FAILSAFE;							// use fail safe values if signal lost
-    ChannelNum = 0;							// reset the channel count
-  }
-}
-
-
-ISR (TIMER1_CAPT_vect)							// we want to measure the time to the end of the pulse
-{
-  TCNT1 = 0;								// reset the counter
-  if (ICR1 >= SYNC_GAP_LEN) {						// is the space between pulses big enough to be the SYNC
-    processSync();
-  } else {
-    if (ChannelNum < MAX_CHANNELS) {					// check if it's a valid channel pulse
-      if ((ICR1 >= MIN_IN_PULSE) && (ICR1 <= MAX_IN_PULSE)) {		// check for valid channel data
-        Pulses[++ChannelNum] = ICR1 / TICKS_PER_uS;			// store pulse length as microseconds
-	if (ChannelNum == DSM_CHANNELS)					// if we saw DSM_CHANNELS count channels
-          newDSM = 1;							// we are ready to send these new ones as DSM frame
-      } else {
-        if (State == READY) {
-          State = FAILSAFE;						// use fail safe values if input data invalid
-          ChannelNum = 0;						// reset the channel count
-        }
-      }
-    }
-  }
-}
-
-
-/* ---------- ---------- ---------- Class ---------- ---------- ---------- */
-class PPM_Decode {
 
 public:
   PPM_Decode(void)							// Constructor
@@ -241,77 +183,10 @@ public:
 PPM_Decode PPM = PPM_Decode();
 
 
-void setup(void)
-{
-#ifndef DEBUG
-  Serial.begin(125000);							// closest speed for DSM module, otherwise it won't work
-#else
-  Serial.begin(115200);							// print values on the screen
-#endif
-
-  PPM.begin();
-
-  pinMode(BINDING_PIN, INPUT_PULLUP);
-  pinMode(BINDING_LED, OUTPUT);
-  pinMode(PPM_OK_LED,  OUTPUT);
-  pinMode(RF_OK_PIN,   OUTPUT);
-  pinMode(GREEN_LED,   OUTPUT);
-
-  digitalWrite(BINDING_LED, HIGH);					// turn on the binding LED
-  while (PPM.getState() != READY)					// wait until PPM data is stable and ready
-    delay(20);
-
-  DSM_Header[0] |= DSM_BIND;						// set the bind flag
-  while (digitalRead(BINDING_PIN) == LOW) {				// while bind button pressed at power up
-    if (PPM.getState() == READY) {					// and if PPM data is stable and ready
-      if (millis() % FLASH_LED >= FLASH_LED / 2)			// flash binding LED
-        digitalWrite(BINDING_LED, HIGH);
-      else
-        digitalWrite(BINDING_LED, LOW);
-      pulseToDSM();							// get current PPM data as failsafe for the receiver to bind
-      sendDSM();
-      delay(20);
-    }
-  }
-  DSM_Header[0] &= ~DSM_BIND;						// clear the bind flag
-
-  digitalWrite(BINDING_LED, LOW);					// turn off the binding LED
-}
-
-
-void loop(void)
-{
-  if (millis() % (FLASH_LED * 2) < FLASH_LED / 10)			// flash the board LED - we are alive
-    digitalWrite(GREEN_LED, HIGH);
-  else
-    digitalWrite(GREEN_LED, LOW);
-
-  if (PPM.getState() == READY) {					// if ready
-    if (millis() % (FLASH_LED * 2) < FLASH_LED / 10)			// flash the PPM ok LED
-      digitalWrite(PPM_OK_LED, HIGH);
-    else
-      digitalWrite(PPM_OK_LED, LOW);
-    digitalWrite(BINDING_LED, LOW);					// turn off binding LED
-    digitalWrite(RF_OK_PIN, LOW);					// turn on RF ok LED in the radio
-
-    if (newDSM) {							// if new DSM data available
-      pulseToDSM();							// get current data
-      sendDSM();							// send DSM frame
-      newDSM = 0;							// frame send
-    }
-  } else {								// else failsafe
-    digitalWrite(PPM_OK_LED, LOW);					// turn off the PPM ok LED
-    digitalWrite(BINDING_LED, HIGH);					// turn on binding LED
-    digitalWrite(RF_OK_PIN, HIGH);					// turn off RF ok LED in the radio, alarm will sound
-
-    pulseToDSM();							// get current PPM data
-    sendDSM();								// send DSM frame
-    delay(20);								// but send not faster than 20ms
-  }
-}
-
-
-void pulseToDSM(void)
+/**
+ * @brief  pulseToDSM
+ */
+static void pulseToDSM(void)
 {
   int pulse;
   for (byte i=0; i<DSM_CHANNELS; i++) {
@@ -325,15 +200,35 @@ void pulseToDSM(void)
 
 #ifndef DEBUG
 
-void sendDSM(void)
+/**
+ * @brief  sendDSM
+ */
+static void sendDSM(void)
 {
     Serial.write(DSM_Header, 2);
     Serial.write(DSM_Channel, DSM_CHANNELS * 2);
+    newDSM = 0;								// frame send
 }
 
 #else
 
-void sendDSM(void)
+/**
+ * @brief  serialPrintHex
+ */
+static void serialPrintHex(byte b)
+{
+    byte b1 = (b >> 4) & 0x0F;
+    byte b2 = (b & 0x0F);
+    char c1 = (b1 < 10) ? ('0' + b1) : 'A' + b1 - 10;
+    char c2 = (b2 < 10) ? ('0' + b2) : 'A' + b2 - 10;
+    Serial.print(c1);
+    Serial.print(c2);
+}
+
+/**
+ * @brief  sendDSM
+ */
+static void sendDSM(void)
 {
     int value;
     Serial.print(millis(), DEC);
@@ -370,16 +265,150 @@ void sendDSM(void)
     Serial.print(PPM.getChannelData(0), DEC);				// sync pulse length
     Serial.print("  ");
     Serial.println(" ");
-}
-
-void serialPrintHex(byte b)
-{
-    byte b1 = (b >> 4) & 0x0F;
-    byte b2 = (b & 0x0F);
-    char c1 = (b1 < 10) ? ('0' + b1) : 'A' + b1 - 10;
-    char c2 = (b2 < 10) ? ('0' + b2) : 'A' + b2 - 10;
-    Serial.print(c1);
-    Serial.print(c2);
+    newDSM = 0;								// frame send
 }
 
 #endif
+
+
+/**
+ * @brief  processSync
+ */
+static void processSync(void)						// sync pulse was detected so reset the channel to first and update the system state
+{
+  Pulses[0] = ICR1 / TICKS_PER_uS;					// save the sync pulse duration for debugging
+  if (State == READY) {
+    if (ChannelNum != ChannelCnt)					// if the number of channels is unstable, go into failsafe
+      State = FAILSAFE;
+  } else {
+    if (State == NOT_SYNCED) {
+      State = ACQUIRE;							// this is the first sync pulse, we need one more to fill the channel data array
+      acquireCount = 0;
+    } else {
+      if (State == ACQUIRE) {
+        if (++acquireCount > ACQUIRE_FRAMES) {
+          State = READY;						// this is the ACQUIRE_FRAMESth sync and all channel data is ok so flag that channel data is valid
+          ChannelCnt = ChannelNum;					// save the number of channels detected
+        }
+      } else {
+        if (State == FAILSAFE) {
+          if (ChannelNum == ChannelCnt)					// did we get good pulses on all channels?
+            State = READY;
+        }
+      }
+    }
+  }
+  ChannelNum = 0;							// reset the channel counter
+}
+
+
+/**
+ * @brief  timer overflow interrupt
+ */
+ISR (TIMER1_OVF_vect)
+{
+  if (State == READY) {
+    State = FAILSAFE;							// use fail safe values if signal lost
+    ChannelNum = 0;							// reset the channel count
+  }
+}
+
+
+/**
+ * @brief  timer capture interrupt
+ */
+ISR (TIMER1_CAPT_vect)							// we want to measure the time to the end of the pulse
+{
+  TCNT1 = 0;								// reset the counter
+  if (ICR1 >= SYNC_GAP_LEN) {						// is the space between pulses big enough to be the SYNC
+    processSync();
+  } else {
+    if (ChannelNum < MAX_CHANNELS) {					// check if it's a valid channel pulse
+      if ((ICR1 >= MIN_IN_PULSE) && (ICR1 <= MAX_IN_PULSE)) {		// check for valid channel data
+        Pulses[++ChannelNum] = ICR1 / TICKS_PER_uS;			// store pulse length as microseconds
+	if (ChannelNum == DSM_CHANNELS)					// if we saw DSM_CHANNELS count channels
+          newDSM = 1;							// we are ready to send these new ones as DSM frame
+      } else {
+        if (State == READY) {
+          State = FAILSAFE;						// use fail safe values if input data invalid
+          ChannelNum = 0;						// reset the channel count
+        }
+      }
+    }
+  }
+}
+
+
+/**
+ * @brief  setup
+ */
+void setup(void)
+{
+#ifndef DEBUG
+  Serial.begin(125000);							// closest speed for DSM module, otherwise it won't work
+#else
+  Serial.begin(115200);							// print values on the screen
+#endif
+
+  PPM.begin();
+
+  pinMode(BINDING_PIN, INPUT_PULLUP);
+  pinMode(BINDING_LED, OUTPUT);
+  pinMode(PPM_OK_LED,  OUTPUT);
+  pinMode(RF_OK_PIN,   OUTPUT);
+  pinMode(GREEN_LED,   OUTPUT);
+
+  digitalWrite(BINDING_LED, HIGH);					// turn on the binding LED
+  while (PPM.getState() != READY)					// wait until PPM data is stable and ready
+    delay(20);
+
+  DSM_Header[0] |= DSM_BIND;						// set the bind flag
+  while (digitalRead(BINDING_PIN) == LOW) {				// while bind button pressed at power up
+    if (PPM.getState() == READY) {					// and if PPM data is stable and ready
+      if (millis() % FLASH_LED >= FLASH_LED / 2)			// flash binding LED
+        digitalWrite(BINDING_LED, HIGH);
+      else
+        digitalWrite(BINDING_LED, LOW);
+      pulseToDSM();							// get current PPM data as failsafe for the receiver to bind
+      sendDSM();							// send DSM frame
+      delay(20);							// but send not faster than every 20ms
+    }
+  }
+  DSM_Header[0] &= ~DSM_BIND;						// clear the bind flag
+
+  digitalWrite(BINDING_LED, LOW);					// turn off the binding LED
+}
+
+
+/**
+ * @brief  main loop
+ */
+void loop(void)
+{
+  if (millis() % (FLASH_LED * 2) < FLASH_LED / 10)			// flash the board LED - we are alive
+    digitalWrite(GREEN_LED, HIGH);
+  else
+    digitalWrite(GREEN_LED, LOW);
+
+  if (PPM.getState() == READY) {					// if ready
+    if (millis() % (FLASH_LED * 2) < FLASH_LED / 10)			// flash the PPM ok LED
+      digitalWrite(PPM_OK_LED, HIGH);
+    else
+      digitalWrite(PPM_OK_LED, LOW);
+    digitalWrite(BINDING_LED, LOW);					// turn off binding LED
+    digitalWrite(RF_OK_PIN, LOW);					// turn on RF ok LED in the radio
+
+    if (newDSM) {							// if new DSM data available
+      pulseToDSM();							// get current PPM data
+      sendDSM();							// send DSM frame
+    }
+  } else {								// else failsafe
+    digitalWrite(PPM_OK_LED, LOW);					// turn off the PPM ok LED
+    digitalWrite(BINDING_LED, HIGH);					// turn on binding LED
+    digitalWrite(RF_OK_PIN, HIGH);					// turn off RF ok LED in the radio, alarm will sound
+
+    pulseToDSM();							// get current PPM data
+    sendDSM();								// send DSM frame
+    delay(20);								// but send not faster than every 20ms
+  }
+}
