@@ -86,14 +86,14 @@ resulting in the following defines:
 #define CAPTURE_EDGE		CAPTURE_FALLING				// choose edge
 
 #define TICKS_PER_uS		1					// number of timer ticks per 1 microsecond with prescaler = 8 and CPU 8MHz
-#define MAX_CHANNELS		8					// maximum number of channels we can store, don't increase this above 8
 #define MIN_IN_PULSE		( 750 * TICKS_PER_uS)			// valid pulse must be at least   750us
 #define MAX_IN_PULSE		(2250 * TICKS_PER_uS)			// valid pulse must be less than 2250us
 #define SYNC_GAP_LEN		(5000 * TICKS_PER_uS)			// we assume a space at least 5000us is sync
 
-#define ACQUIRE_FRAMES		10					// must have this many consecutive valid frames to transition to the ready state
-
+#define MAX_CHANNELS		8					// maximum number of channels we can store, don't increase this above 8
 #define DSM_CHANNELS		6					// max number of DSM channels transmitted
+
+#define ACQUIRE_FRAMES		10					// must have this many consecutive valid frames to transition to the ready state
 
 #define BINDING_PIN		4					// Pin used to bind
 #define BINDING_LED		5					// Pin used for binding in process LED
@@ -171,7 +171,7 @@ ISR (TIMER1_CAPT_vect)							// we want to measure the time to the end of the pu
   if (ICR1 >= SYNC_GAP_LEN) {						// is the space between pulses big enough to be the SYNC
     processSync();                          
   } else {                                     
-    if (ChannelNum < MAX_CHANNELS) {					// check if its a valid channel pulse and save it
+    if (ChannelNum < MAX_CHANNELS) {					// check if it's a valid channel pulse
       if ((ICR1 >= MIN_IN_PULSE) && (ICR1 <= MAX_IN_PULSE)) {		// check for valid channel data
         Pulses[++ChannelNum] = ICR1 / TICKS_PER_uS;			// store pulse length as microseconds
 	if (ChannelNum == DSM_CHANNELS)					// if we saw DSM_CHANNELS count channels
@@ -219,16 +219,6 @@ public:
     return State;
   }
 
-  byte getChannelNum(void)
-  {
-    return ChannelNum;
-  }
-
-  byte getChannelCnt(void)
-  {
-    return ChannelCnt;
-  }
-
   int getChannelData(uint8_t channel)					// this is the access function for channel data
   {
     int result = 0;							// default value
@@ -253,10 +243,10 @@ PPM_Decode PPM = PPM_Decode();
 
 void setup(void)
 {
-#ifdef DEBUG
-  Serial.begin(115200);							// print values on the screen
-#else
+#ifndef DEBUG
   Serial.begin(125000);							// closest speed for DSM module, otherwise it won't work
+#else
+  Serial.begin(115200);							// print values on the screen
 #endif
   
   PPM.begin();
@@ -381,7 +371,6 @@ void sendDSM(void)
     Serial.print("  ");
     Serial.println(" ");
 }
-
 
 void serialPrintHex(byte b)
 {
