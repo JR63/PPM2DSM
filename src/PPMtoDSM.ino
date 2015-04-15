@@ -145,7 +145,7 @@ public:
 									// PWM11  = 0, PWM10  = 0  =>  PWM operation disabled
     TCCR1B = CAPTURE_EDGE;						// set capture and prescaler
 									// 8 MHz clock with prescaler 8 means TCNT1 increments every 1 uS
-    TIMSK1 = _BV(ICIE1) | _BV (TOIE1);					// enable input capture and overflow interrupts for timer 1
+    TIMSK1 = _BV(ICIE1) | _BV(TOIE1);					// enable input capture and overflow interrupts for timer 1
   }
 
   State_t getState(void)
@@ -201,7 +201,7 @@ static void sendDSM(void)
 {
     Serial.write(DSM_Header, 2);
     Serial.write(DSM_Channel, DSM_CHANNELS * 2);
-    newDSM = 0;								// frame send
+    newDSM = 0;								// frame sent
 }
 
 #else
@@ -259,7 +259,7 @@ static void sendDSM(void)
     Serial.print(PPM.getChannelData(0), DEC);				// sync pulse length
     Serial.print("  ");
     Serial.println(" ");
-    newDSM = 0;								// frame send
+    newDSM = 0;								// frame sent
 }
 
 #endif
