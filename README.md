@@ -1,6 +1,7 @@
 # PPM2DSM
 PPM to DSM
 
+see : http://oshpark.com/shared_projects/yIRmBzAG
 
 R1 = 220 Ohm
 
