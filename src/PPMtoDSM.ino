@@ -1,7 +1,7 @@
 /*
   PPM to DSM v1.07 - June 2011
 
-  JR version v0.01 - April 2015
+  JR version v0.02 - February 2016
 
   Sends DSM2 or DSMX signal using Spektrum TX module.
   Based on the code by daniel_arg, modifications by AS aka c2po.
@@ -22,63 +22,77 @@
 */
 
 
+/*
+    How to bind.
+    
+    Bind-N-Fly lets you use your DSMx transmitter by simply binding it to a BNF model in 4 simple steps:
+
+    1. Turn the DSMx transmitter off and set all sticks in the failsafe position of your choice.
+    2. Power up the BNF model by connecting the battery to the receiver.
+    3. When you see the receiver LED start flashing, turn on your DSMx transmitter in Bind mode!
+    4. Fifteen seconds after the LED stops flashing, the bind is complete. At this point, the receiver LED is on solid, and you’re ready to fly.
+*/
+
+
 #include "Arduino.h"
 #include <avr/interrupt.h>
 
 
-//#define DEBUG
+#define USE_FUTABA			// FUTABA Tx is used
+
+//#define BIND_AT_RUNTIME		// untested
+
+//#define DEBUG				// for debugging
 
 
 /*
 
 Description of the first byte in the DSM Header
 
-DSM2/DSMX	flight		0x18
-DSM2/DSMX	range test	0x38
-DSM2/DSMX	bind		0x98
-
-DSM2		flight		0x10
-DSM2		range test	0x30
-DSM2		bind		0x90
-
-France		flight		0x00
-France		range test	0x20
-France		bind		0x80
-
-So the bit meaning of the first byte is:
-
 bit 7	-	bind			1 -> enabled		0 -> disabled
-bit 6	-	unknown, always 0
+bit 6	-	tx power		1 -> USA		0 -> normal		(unverified info)	Attention: USA eventually needs more mA than the Arduino can deliver
 bit 5	-	range test		1 -> enabled		0 -> disabled
 bit 4	-	NOT France		1 -> not France		0 -> France
 bit 3	-	DSMX			1 -> enabled		0 -> disabled
-bit 2	-	unknown, always 0
-bit 1	-	unknown, always 0
-bit 0	-	unknown, always 0
+bit 2	-	unknown			always 0
+bit 1	-	unknown			always 0
+bit 0	-	heli/plane		1 -> heli		0 -> plane		(unverified info)
 
-resulting in the following defines:
+Description of the second byte in the DSM Header					(unverified info)
+
+0x00 = mode  1
+0x01 = mode  2
+...
+0x07 = mode  8
+0x08 = mode  9	heli
+0x09 = mode 10	heli
 
 */
 
 
 #define DSM_BIND		0x80
+#define DSM_TX_USA		0x40
 #define DSM_RANGE		0x20
 #define DSM_NOT_FRANCE		0x10
 #define DSM_DSMX		0x08
+#define DSM_HELI		0x01
 
 #define DSM_HEADER_0		DSM_NOT_FRANCE | DSM_DSMX
 #define DSM_HEADER_1		0x00
 
-//#define PWM_MID			1500
-//#define PWM_SUB			1000
+#ifdef USE_FUTABA
 #define PWM_MID			1520					// Futaba midpoint is 1520 microseconds ...
 #define PWM_SUB			1008					// ... so with 10bit we have min = 1008, max = 2031 resulting in 0 to 1023 for DSM pulse
+#else // USE_FUTABA
+#define PWM_MID			1500					// normal midpoint is 1500 microseconds ...
+#define PWM_SUB			988					// ... so with 10bit we have min = 988, max = 2011 resulting in 0 to 1023 for DSM pulse
+#endif // USE_FUTABA
 
 #define P_COR			10					// add some microseconds for global oscillator correction
 
 #define CHANNEL_MAPPING		1,2,3,4,5,6				// choose your channel mapping
 #define THROTTLE_CHANNEL	1					// choose your throttle channel
-#define PWM_MIN_THROTTLE	1008					// choose your min throttle
+#define PWM_MIN_THROTTLE	PWM_SUB					// choose your min throttle
 
 #define CAPTURE_RISING		(1<<CS11) | (1<<ICES1)			// prescaler = 8, capture using rising edge
 #define CAPTURE_FALLING		(1<<CS11)				// prescaler = 8, capture using falling edge
@@ -99,9 +113,12 @@ resulting in the following defines:
 #define BINDING_LED		5					// Pin used for binding in process LED
 #define PPM_OK_LED		6					// Pin used for PPM ok signal LED
 #define RF_OK_PIN		7					// Pin used for RF ok signal
+#define PPM_IN			8					// Pin used for PPM signal in, do not change!
 #define GREEN_LED		13					// Pin used for board LED
 
 #define FLASH_LED		250					// LED flash interval in ms
+
+#define BIND_DEBOUNCE		1000					// for debouncing of bind key
 
 
 typedef enum {
@@ -140,7 +157,7 @@ public:
 
   void begin(void)
   {
-    pinMode(8, INPUT);							// timer 1 interrupt handler uses pin 8 as input, do not change it
+    pinMode(PPM_IN, INPUT);						// timer 1 interrupt handler uses pin 8 as input, do not change it
     TCCR1A = 0x00;							// COM1A1 = 0, COM1A0 = 0  =>  disconnect Pin OC1 from timer/counter 1
 									// PWM11  = 0, PWM10  = 0  =>  PWM operation disabled
     TCCR1B = CAPTURE_EDGE;						// set capture and prescaler
@@ -204,7 +221,7 @@ static void sendDSM(void)
     newDSM = 0;								// frame sent
 }
 
-#else
+#else // DEBUG
 
 /**
  * @brief  serialPrintHex
@@ -262,7 +279,7 @@ static void sendDSM(void)
     newDSM = 0;								// frame sent
 }
 
-#endif
+#endif // DEBUG
 
 
 /**
@@ -337,9 +354,9 @@ void setup(void)
 {
 #ifndef DEBUG
   Serial.begin(125000);							// closest speed for DSM module, otherwise it won't work
-#else
+#else // DEBUG
   Serial.begin(115200);							// print values on the screen
-#endif
+#endif // DEBUG
 
   PPM.begin();
 
@@ -371,11 +388,61 @@ void setup(void)
 }
 
 
+#ifdef BIND_AT_RUNTIME
+/**
+ * @brief  check for bind procedure
+ */
+void check_bind(void)
+{
+  static int key_cnt = 0;
+
+  if (digitalRead(BINDING_PIN) == LOW)
+    key_cnt++;
+  else
+    key_cnt = 0;
+
+  if (key_cnt >= BIND_DEBOUNCE) {
+    key_cnt = 0;
+  
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(PPM_OK_LED, LOW);
+    digitalWrite(BINDING_LED, HIGH);
+    
+    delay(1000);							// pause sending
+    DSM_Header[0] |= DSM_BIND;						// set the bind flag
+  
+    while (digitalRead(BINDING_PIN) == LOW) {				// while bind button pressed
+      if (PPM.getState() == READY) {					// and if PPM data is stable and ready
+        if (millis() % FLASH_LED >= FLASH_LED / 2)			// flash binding LED
+          digitalWrite(BINDING_LED, HIGH);
+        else
+          digitalWrite(BINDING_LED, LOW);
+        pulseToDSM();							// get current PPM data as failsafe for the receiver to bind
+        sendDSM();							// send DSM frame
+        delay(20);							// but send not faster than every 20ms
+      }
+    }
+    
+    digitalWrite(GREEN_LED, HIGH);
+    digitalWrite(BINDING_LED, LOW);
+  
+    delay(1500);							// pause sending
+    DSM_Header[0] &= ~DSM_BIND;						// clear the bind flag
+  }
+}
+#endif // BIND_AT_RUNTIME
+
+
 /**
  * @brief  main loop
  */
 void loop(void)
 {
+
+#ifdef BIND_AT_RUNTIME
+  check_bind();
+#endif // BIND_AT_RUNTIME
+
   if (millis() % (FLASH_LED * 2) < FLASH_LED / 10)			// flash the board LED - we are alive
     digitalWrite(GREEN_LED, HIGH);
   else
